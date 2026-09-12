@@ -9,7 +9,7 @@ export const catalog = [
 
 export const info = Object.fromEntries(catalog.map(p => [p.id, p]));
 const sellers = { pilot:'MarketPilot', npc1:'小明商店', npc2:'3C之家', npc3:'生活百貨' };
-const buyers = [
+export const buyers = [
   {name:'小安',emoji:'🧑🏻‍💻',budget:1.15,likes:['3C','服飾']}, {name:'雅婷',emoji:'👩🏻',budget:1.35,likes:['生活用品','食品']},
   {name:'阿哲',emoji:'🧑🏻',budget:.95,likes:['3C','服飾']}, {name:'米米',emoji:'🧑🏼‍🎨',budget:1.25,likes:['服飾','食品']},
   {name:'志豪',emoji:'👨🏻',budget:1.5,likes:['生活用品','3C']},
@@ -41,12 +41,42 @@ export function validateAction(action, state) {
 
 export function queueActions(state, actions) { const rejected = actions.map(action => ({ action, error:validateAction(action, state) })).filter(x => x.error); if (rejected.length) return { accepted:[], rejected }; state.pendingActions.push(...structuredClone(actions)); return { accepted:actions, rejected:[] }; }
 
-export function step(oldState) {
+function applyPurchase(state, listing, buyer, review, logs) {
+  if (!listing || listing.inventory < 1) return false;
+  const product = info[listing.productId];
+  listing.inventory--;
+  listing.unitsSold++;
+  listing.revenue += listing.price;
+  listing.profit += listing.price - product.cost;
+  if (review) {
+    const score = Math.max(1, Math.min(5, Number(review.score) || 4));
+    listing.rating = (listing.rating * listing.reviews + score) / (listing.reviews + 1);
+    listing.reviews++;
+    listing.reviewItems = [{ id:`${state.day}-${listing.id}-${listing.reviews}`, buyer:buyer.name, emoji:buyer.emoji, score, text:String(review.text || '').slice(0,160), day:state.day }, ...(listing.reviewItems || [])].slice(0, 8);
+  }
+  if (listing.seller === 'pilot') logs.push(`${buyer.name} 購買了 ${listing.price} 元的「${product.name}」`);
+  return true;
+}
+
+export function step(oldState, buyerDecisions = null) {
   const state = structuredClone(oldState); const random = seeded(state.seed + state.day * 7919); state.day++; const logs = [`Day ${state.day}`];
   if (random() <= .31) { const choices = [{name:'🔥 市場需求暴增',effect:1.3,duration:2},{name:'📉 市場需求下降',effect:.7,duration:2},{name:'🔥 服飾類突然熱門',effect:1.35,duration:3,category:'服飾'},{name:'🛍️ 購物節',effect:1.45,duration:1}]; const event = {...choices[Math.floor(random()*choices.length)],event_id:`E${state.day}`,start_day:state.day}; state.events.push(event); logs.push(`${event.name}｜需求 ${event.effect > 1 ? '+' : '-'}${Math.round(Math.abs(event.effect-1)*100)}%`); }
   for (const action of state.pendingActions) { const product = info[action.productId]; let listing = state.listings.find(x => x.seller === 'pilot' && x.productId === action.productId); if (action.type === 'list_product') { listing = {id:`pilot-${action.productId}`,seller:'pilot',productId:action.productId,price:Number(action.price),inventory:Number(action.initial_inventory),initialInventory:Number(action.initial_inventory),rating:4.5,reviews:0,unitsSold:0,revenue:0,profit:0,restocked:0,reviewItems:[]}; state.listings.push(listing); } else if (action.type === 'update_price') listing.price = Number(action.price); else if (action.type === 'restock') { listing.inventory += Number(action.quantity); listing.restocked += Number(action.quantity); } else state.listings = state.listings.filter(x => x !== listing); logs.push(`MarketPilot 執行：${action.type} ${product.name}`); }
   state.pendingActions = [];
-  for (const listing of state.listings) { if (!listing.inventory) continue; const product = info[listing.productId]; const base = 13 * Math.max(.15, 1.75-listing.price/(product.cost*1.55)) * (.65+product.quality*.55) * (.65+listing.rating/5*.55) * demandFactor(state,product) * (.65+random()*.7); const candidates = Array.from({length:Math.max(0,Math.round(base))}, () => purchaseScore(buyers[Math.floor(random()*buyers.length)], product, listing, random)).filter(score => score >= 1.28 + random()*.18); const sold = Math.min(listing.inventory, candidates.length); listing.inventory -= sold; listing.unitsSold += sold; listing.revenue += sold * listing.price; listing.profit += sold * (listing.price-product.cost); if (listing.seller === 'pilot' && sold) logs.push(`MarketPilot 售出 ${sold} 件「${product.name}」`); }
+  if (Array.isArray(buyerDecisions)) {
+    const buyerByName = new Map(buyers.map(buyer => [buyer.name, buyer]));
+    const processedBuyers = new Set();
+    for (const decision of buyerDecisions) {
+      const buyer = buyerByName.get(decision?.buyer);
+      const listing = state.listings.find(item => item.id === decision?.listingId);
+      if (!buyer || processedBuyers.has(buyer.name)) continue;
+      processedBuyers.add(buyer.name);
+      if (listing && decision.buy === true) applyPurchase(state, listing, buyer, decision.review, logs);
+    }
+    logs.push(`OpenAI 買家完成 ${processedBuyers.size} 個購買決策`);
+  } else {
+    for (const listing of state.listings) { if (!listing.inventory) continue; const product = info[listing.productId]; const base = 13 * Math.max(.15, 1.75-listing.price/(product.cost*1.55)) * (.65+product.quality*.55) * (.65+listing.rating/5*.55) * demandFactor(state,product) * (.65+random()*.7); const candidates = Array.from({length:Math.max(0,Math.round(base))}, () => purchaseScore(buyers[Math.floor(random()*buyers.length)], product, listing, random)).filter(score => score >= 1.28 + random()*.18); const sold = Math.min(listing.inventory, candidates.length); listing.inventory -= sold; listing.unitsSold += sold; listing.revenue += sold * listing.price; listing.profit += sold * (listing.price-product.cost); if (listing.seller === 'pilot' && sold) logs.push(`MarketPilot 售出 ${sold} 件「${product.name}」`); }
+  }
   state.events = state.events.filter(e => state.day < e.start_day + e.duration); state.history.push({day:state.day,...metrics(state)}); state.logs = [...logs,...state.logs].slice(0,80); return state;
 }
 

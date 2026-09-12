@@ -27,4 +27,8 @@ curl -X POST http://localhost:3001/api/step \
 
 可用動作：`list_product`、`update_price`、`restock`、`delist_product`。每個動作必須含 `productId`；上架和改價另需 `price`（高於成本），上架需 `initial_inventory`，補貨需 `quantity`。
 
-OpenAI 應由你的 Agent 伺服器讀取 `OPENAI_API_KEY` 後，再呼叫上述 API；不要將金鑰交給瀏覽器。可用 Responses API 的 function calling，將 `GET /api/state`、`POST /api/actions` 與 `POST /api/step` 定義成模型工具。
+## OpenAI 買家
+
+先在兩個終端分別啟動 `npm run api` 與 `npm run dev`。到「模擬控制台」貼上 API Key 後，系統會在每個模擬日用 `gpt-5-mini` 扮演五位買家，依預算、品類偏好、價格和評價決定是否購買，並為成交商品留下短評。
+
+Key 僅透過本機 `localhost` 傳給 API 程序並保留在記憶體；不會寫入檔案、Git 或瀏覽器儲存空間，重啟 `npm run api` 後即清除。也可在啟動前以 `OPENAI_API_KEY` 環境變數設定；要改用其他可用模型，設定 `OPENAI_MODEL`（預設為 `gpt-5-mini`）。未設定 Key 時，會維持原本的規則式買家模擬。
